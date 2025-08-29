@@ -7,11 +7,10 @@ import feedparser
 
 # --- Настройки ---
 TOKEN = os.getenv("TOKEN")
-NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
 # --- Кеш ---
-CACHE_FILE = "cache/news_cache.json"
+CACHE_FILE = "cache/psych_cache.json"
 
 def load_cache():
     if os.path.exists(CACHE_FILE):
@@ -36,79 +35,30 @@ def translate_text(text):
         print(f"Ошибка перевода: {e}")
         return text
 
+# --- Источники: 5 русскоязычных, 5 англоязычных ---
+SOURCES = [
+    # 🇷🇺 Русскоязычные
+    {"url": "https://habr.com/ru/rss/search/?q=психология&target_type=posts&order=date", "name": "Habr: Психология", "lang": "ru"},
+    {"url": "https://nplus1.ru/rss", "name": "N+1: Наука", "lang": "ru"},
+    {"url": "https://tjournal.ru/rss", "name": "TJournal: Саморазвитие", "lang": "ru"},
+    {"url": "https://vc.ru/search/rss?query=психология", "name": "VC.ru: Психология", "lang": "ru"},
+    {"url": "https://arzamas.academy/courses?rss", "name": "Arzamas: Психология", "lang": "ru"},
+
+    # 🌍 Англоязычные
+    {"url": "https://www.reddit.com/r/Psychology.rss", "name": "Reddit: Psychology", "lang": "en"},
+    {"url": "https://www.psychologytoday.com/us/blog/the-athletes-way/rss2.xml", "name": "Psychology Today", "lang": "en"},
+    {"url": "https://rss.sciencedaily.com/mind_brain/psychology.xml", "name": "ScienceDaily: Psychology", "lang": "en"},
+    {"url": "https://www.sciencenews.org/category/psychology/feed", "name": "ScienceNews: Psychology", "lang": "en"},
+    {"url": "https://theconversation.com/health/rss", "name": "The Conversation: Health", "lang": "en"}
+]
+
 # --- Ключевые слова ---
-KEYWORDS_EN = [
-    'technology', 'innovation', 'space', 'AI', 'artificial intelligence',
-    'robotics', 'green energy', '3D printing', 'metallurgy', 'digitalization'
+KEYWORDS = [
+    'психология', 'терапия', 'мотивация', 'саморазвитие', 'тревожность',
+    'депрессия', 'осознанность', 'коуч', 'психолог', 'mental health',
+    'therapy', 'mindfulness', 'self-improvement', 'anxiety', 'depression',
+    'counseling', 'psychotherapy', 'wellbeing', 'emotional health'
 ]
-
-KEYWORDS_RU = [
-    'технологии', 'инновации', 'космос', 'ИИ', 'искусственный интеллект',
-    'робототехника', 'зелёная энергетика', '3D печать', 'металлургия', 'цифровизация'
-]
-
-# --- Поиск новостей ---
-def search_news():
-    articles = []
-
-    # 1. NewsAPI — основной источник
-    if NEWSAPI_KEY:
-        from_date = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
-        query = ' OR '.join(KEYWORDS_EN[:5])  # Узкий запрос
-        try:
-            url = "https://newsapi.org/v2/everything"
-            params = {
-                'q': query,
-                'from': from_date,
-                'language': 'en',
-                'sortBy': 'publishedAt',
-                'pageSize': 20,
-                'apiKey': NEWSAPI_KEY
-            }
-            r = requests.get(url, params=params, timeout=15)
-            if r.status_code == 200:
-                data = r.json()
-                for item in data.get('articles', []):
-                    if item['title'] and item['url']:
-                        articles.append({
-                            'title': item['title'],
-                            'url': item['url'],
-                            'source': item['source']['name'],
-                            'published': item.get('publishedAt', 'Неизвестно')
-                        })
-            else:
-                print(f"❌ NewsAPI ошибка {r.status_code}: {r.text}")
-        except Exception as e:
-            print(f"❌ NewsAPI ошибка: {e}")
-
-    # 2. Тестовые источники (для проверки)
-    try:
-        test_feeds = {
-            'Habr Tech': 'https://habr.com/ru/rss/search/?q=технологии&target_type=posts&order=date',
-            'N+1': 'https://nplus1.ru/rss'
-        }
-        for name, feed_url in test_feeds.items():
-            try:
-                feed = feedparser.parse(feed_url)
-                if feed.bozo:
-                    print(f"⚠️ RSS {name} повреждён")
-                    continue
-                for entry in feed.entries[:10]:
-                    title = entry.get('title', '')
-                    link = entry.get('link', '')
-                    if title and link:
-                        articles.append({
-                            'title': title,
-                            'url': link,
-                            'source': name,
-                            'published': 'Неизвестно'
-                        })
-            except Exception as e:
-                print(f"❌ Ошибка RSS {name}: {e}")
-    except Exception as e:
-        print(f"❌ Ошибка парсинга RSS: {e}")
-
-    return articles
 
 # --- Отправка в Telegram ---
 def send_message(chat_id, text, parse_mode=None, disable_preview=False):
@@ -131,54 +81,89 @@ def send_message(chat_id, text, parse_mode=None, disable_preview=False):
     except Exception as e:
         print(f"❌ Ошибка при отправке: {e}")
 
+# --- Поиск статей за 7 дней ---
+def search_articles():
+    articles = []
+    from_date = datetime.now() - timedelta(days=7)  # 1 неделя
+
+    for src in SOURCES:
+        try:
+            feed = feedparser.parse(src["url"])
+            if feed.bozo:
+                print(f"⚠️ RSS {src['name']} повреждён")
+                continue
+
+            for entry in feed.entries:
+                # Проверяем дату
+                published = entry.get('published_parsed') or entry.get('updated_parsed')
+                if not published:
+                    continue
+                pub_date = datetime(*published[:6])
+                if pub_date < from_date:
+                    continue
+
+                title = entry.get('title', '').lower()
+                summary = entry.get('summary', '').lower()
+
+                # Фильтр по ключевым словам
+                if any(kw.lower() in title or kw.lower() in summary for kw in KEYWORDS):
+                    articles.append({
+                        'title': entry.get('title', 'Без заголовка'),
+                        'url': entry.get('link'),
+                        'source': src["name"],
+                        'lang': src["lang"],
+                        'published': pub_date.isoformat()
+                    })
+        except Exception as e:
+            print(f"❌ Ошибка RSS {src['name']}: {e}")
+
+    return articles
+
 # --- Основная функция ---
 def main():
     print("🚀 Бот запущен (режим GitHub Actions)")
     try:
         seen_urls = load_cache()
-        raw_articles = search_news()
-        print(f"🔍 Получено статей: {len(raw_articles)}")
+        raw_articles = search_articles()
+        print(f"Получено статей: {len(raw_articles)}")
 
-        # Фильтруем по ключевым словам
-        filtered_articles = []
-        for art in raw_articles:
-            title = art['title'].lower()
-            if any(kw.lower() in title for kw in KEYWORDS_RU + KEYWORDS_EN):
-                filtered_articles.append(art)
-
-        print(f"✅ После фильтрации: {len(filtered_articles)}")
-
-        # Убираем дубли
-        articles = [a for a in filtered_articles if a.get('url') not in seen_urls]
+        # Фильтруем дубли
+        new_articles = [a for a in raw_articles if a.get('url') not in seen_urls]
 
         # Ограничиваем 20 новостями
-        selected = articles[:20]
-        print(f"📤 Отправляем: {len(selected)} новостей")
+        selected = new_articles[:20]
+        print(f"Отправляем: {len(selected)} новостей")
 
         if not selected:
-            print("❌ Нет новых новостей для отправки.")
+            print("Нет новых новостей для отправки.")
             if ADMIN_ID:
                 try:
                     admin_id_int = int(ADMIN_ID)
-                    send_message(admin_id_int, "📭 Нет новых новостей по вашим темам.")
+                    send_message(admin_id_int, "📭 Новых статей по психологии пока нет.", disable_preview=True)
                 except ValueError:
                     print(f"❌ ADMIN_ID '{ADMIN_ID}' не является числом")
             return
 
-        # Формируем сообщение
-        msg = "📬 *Ежедневный дайджест*\n\n"
-        for art in selected:
-            title_ru = translate_text(art['title'])
+        # Отправляем порциями по 5
+        batch_size = 5
+        msg = "📬 *Дайджест по психологии (последние 7 дней)*\n\n"
+        for i, art in enumerate(selected, 1):
+            title = art['title']
+            if art['lang'] == 'en':
+                title = translate_text(title)
             source = art.get('source', 'Неизвестно')
-            msg += f"📌 {title_ru}\n🌐 {source}\n🔗 {art['url']}\n\n"
+            msg += f"📌 {title}\n🌐 {source}\n🔗 {art['url']}\n\n"
 
-        # Отправляем
-        if ADMIN_ID:
-            try:
-                admin_id_int = int(ADMIN_ID)
-                send_message(admin_id_int, msg, parse_mode=None, disable_preview=False)
-            except ValueError:
-                print(f"❌ ADMIN_ID '{ADMIN_ID}' не является числом")
+            if i % batch_size == 0 or i == len(selected):
+                if ADMIN_ID:
+                    try:
+                        admin_id_int = int(ADMIN_ID)
+                        send_message(admin_id_int, msg, parse_mode=None, disable_preview=False)
+                    except ValueError:
+                        print(f"❌ ADMIN_ID '{ADMIN_ID}' не является числом")
+                msg = ""
+                if i != len(selected):
+                    msg = "\n"
 
         # Обновляем кеш
         for art in selected:

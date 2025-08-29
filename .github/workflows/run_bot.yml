@@ -1,53 +1,15 @@
-name: 🤖 Психология — RSS-бот
+- name: 🔐 Восстановить кеш новостей
+  uses: actions/cache@v3
+  id: cache-news
+  with:
+    path: cache/news_cache.json
+    key: news-cache-v1
 
-on:
-  schedule:
-    - cron: '0 15 * * *'   # 15:00 UTC = 18:00 МСК
-  workflow_dispatch:
+- name: 📁 Создать папку cache (безопасно)
+  run: |
+    rm -rf cache
+    mkdir -p cache
 
-jobs:
-  run_bot:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 📥 Получить код
-        uses: actions/checkout@v4
-
-      - name: 🐍 Установить Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: 📦 Установить зависимости
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: 🔐 Восстановить кеш статей
-        uses: actions/cache@v3
-        id: cache-articles
-        with:
-          path: cache/psych_cache.json
-          key: psych-cache-v1
-
-      - name: 📁 Создать папку cache (безопасно)
-        run: |
-          rm -f cache          # Удаляем файл, если есть
-          mkdir -p cache       # Создаём папку
-
-      - name: 📄 Инициализировать кеш (если отсутствует)
-        if: steps.cache-articles.outputs.cache-hit != 'true'
-        run: echo "[]" > cache/psych_cache.json
-
-      - name: 🏃 Запустить бота
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          ADMIN_ID: ${{ secrets.ADMIN_ID }}
-          GITHUB_ACTIONS: "true"
-        run: python bot.py
-
-      - name: 💾 Сохранить обновлённый кеш
-        uses: actions/cache@v3
-        with:
-          path: cache/psych_cache.json
-          key: psych-cache-v1
+- name: 📄 Инициализировать кеш (если отсутствует)
+  if: steps.cache-news.outputs.cache-hit != 'true'
+  run: echo "[]" > cache/news_cache.json

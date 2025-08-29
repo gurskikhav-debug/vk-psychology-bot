@@ -7,10 +7,11 @@ import feedparser
 
 # --- Настройки ---
 TOKEN = os.getenv("TOKEN")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
 # --- Кеш ---
-CACHE_FILE = "cache/psych_cache.json"
+CACHE_FILE = "cache/news_cache.json"
 
 def load_cache():
     if os.path.exists(CACHE_FILE):
@@ -35,39 +36,67 @@ def translate_text(text):
         print(f"Ошибка перевода: {e}")
         return text
 
-# --- RSS-источники по психологии ---
-RSS_FEEDS = [
-    {
-        "url": "https://habr.com/ru/rss/search/?q=психология&target_type=posts&order=date",
-        "name": "Habr: Психология"
-    },
-    {
-        "url": "https://nplus1.ru/rss",
-        "name": "N+1: Наука"
-    },
-    {
-        "url": "https://tjournal.ru/rss",
-        "name": "TJournal: Саморазвитие"
-    },
-    {
-        "url": "https://www.reddit.com/r/Psychology.rss",
-        "name": "Reddit: Psychology"
-    },
-    {
-        "url": "https://www.psychologytoday.com/us/blog/the-athletes-way/rss2.xml",
-        "name": "Psychology Today"
-    }
-]
-
 # --- Ключевые слова ---
-KEYWORDS = [
-    'психология', 'терапия', 'мотивация', 'саморазвитие', 'тревожность',
-    'депрессия', 'осознанность', 'коуч', 'психолог', 'mental health',
-    'therapy', 'mindfulness', 'self-improvement', 'anxiety', 'depression'
-]
+KEYWORDS_EN = ['metallurgy', 'ferrous', 'non-ferrous', 'steel', 'metal processing', 'additive manufacturing', '3D printing', 'AI', 'machine learning', 'robotics', 'green energy', 'renewable energy', 'technology']
+KEYWORDS_RU = ['металлургия', 'черная металлургия', 'цветная металлургия', 'производство стали', 'обработка металлов', 'аддитивные технологии', '3D печать', 'искусственный интеллект', 'машинное обучение', 'робототехника', 'зелёная энергетика', 'возобновляемая энергия', 'технологии']
+
+# --- Поиск новостей ---
+def search_news():
+    articles = []
+    if NEWSAPI_KEY:
+        from_date = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
+        query = ' OR '.join(KEYWORDS_EN)
+        try:
+            url = "https://newsapi.org/v2/everything"
+            params = {
+                'q': query,
+                'from': from_date,
+                'language': 'en',
+                'sortBy': 'publishedAt',
+                'pageSize': 20,
+                'apiKey': NEWSAPI_KEY
+            }
+            r = requests.get(url, params=params, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                for item in data.get('articles', []):
+                    articles.append({
+                        'title': item['title'],
+                        'url': item['url'],
+                        'source': item['source']['name'],
+                        'published': item.get('publishedAt', 'Неизвестно')
+                    })
+        except Exception as e:
+            print(f"NewsAPI ошибка: {e}")
+
+    # RSS
+    try:
+        feeds = {
+            'xinhua': 'http://www.xinhuanet.com/rss/world.xml',
+            'sina': 'https://rss.sina.com.cn/news/china.xml',
+            'sohu': 'http://rss.news.sohu.com/rss2/news.xml'
+        }
+        for name, feed_url in feeds.items():
+            try:
+                feed = feedparser.parse(feed_url)
+                for entry in feed.entries:
+                    title = entry.title.lower()
+                    if any(kw.lower() in title for kw in ['metal', 'tech', 'ai', 'energy']):
+                        articles.append({
+                            'title': entry.title,
+                            'url': entry.link,
+                            'source': name,
+                            'published': entry.get('published', 'Неизвестно')
+                        })
+            except Exception as e:
+                print(f"Ошибка RSS {name}: {e}")
+    except Exception as e:
+        print(f"Ошибка парсинга RSS: {e}")
+
+    return articles
 
 # --- Отправка в Telegram ---
-def send_message(chat_id, text, parse_mode='Markdown', disable_preview=False):
+def send_message(chat_id, text, parse_mode=None, disable_preview=False):
     if not chat_id:
         print("❌ chat_id не задан")
         return
@@ -76,8 +105,8 @@ def send_message(chat_id, text, parse_mode='Markdown', disable_preview=False):
         data = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": parse_mode,
-            "disable_web_page_preview": not disable_preview
+            "parse_mode": parse_mode,  # ← Отключаем Markdown
+            "disable_web_page_preview": disable_preview
         }
         response = requests.post(url, data=data, timeout=10)
         if response.status_code == 200:
@@ -87,102 +116,59 @@ def send_message(chat_id, text, parse_mode='Markdown', disable_preview=False):
     except Exception as e:
         print(f"❌ Ошибка при отправке: {e}")
 
-# --- Поиск статей ---
-def search_articles():
-    articles = []
-    from_date = datetime.now() - timedelta(days=3)
-
-    for feed in RSS_FEEDS:
-        try:
-            parsed = feedparser.parse(feed["url"])
-            for entry in parsed.entries:
-                # Проверяем дату
-                published = entry.get('published_parsed') or entry.get('updated_parsed')
-                if published:
-                    pub_date = datetime(*published[:6])
-                    if pub_date < from_date:
-                        continue
-
-                title = entry.get('title', '').lower()
-                summary = entry.get('summary', '').lower()
-
-                # Фильтр по ключевым словам
-                if any(kw.lower() in title or kw.lower() in summary for kw in KEYWORDS):
-                    articles.append({
-                        'title': entry.get('title', 'Без заголовка'),
-                        'url': entry.get('link'),
-                        'source': feed["name"]
-                    })
-        except Exception as e:
-            print(f"Ошибка RSS {feed['name']}: {e}")
-
-    return articles
-
 # --- Основная функция ---
 def main():
     print("🚀 Бот запущен (режим GitHub Actions)")
     try:
         seen_urls = load_cache()
-        raw_articles = search_articles()
+        raw_articles = search_news()
         print(f"Получено статей: {len(raw_articles)}")
 
-        # Фильтруем дубли
-        new_articles = [a for a in raw_articles if a.get('url') not in seen_urls]
+        # Фильтруем
+        filtered_articles = []
+        for art in raw_articles:
+            title = art['title'].lower()
+            if any(kw.lower() in title for kw in KEYWORDS_RU + KEYWORDS_EN):
+                filtered_articles.append(art)
+
+        print(f"После фильтрации: {len(filtered_articles)}")
+
+        # Убираем дубли
+        articles = [a for a in filtered_articles if a.get('url') not in seen_urls]
 
         # Ограничиваем 20 новостями
-        selected = new_articles[:20]
+        selected = articles[:20]
         print(f"Отправляем: {len(selected)} новостей")
 
-        # --- Отправляем логику поиска ---
-        logic_msg = "🔍 *Логика поиска:*\n\n"
-        logic_msg += "Бот ищет посты и статьи по теме:\n"
-        logic_msg += "• Психология\n"
-        logic_msg += "• Терапия и саморазвитие\n"
-        logic_msg += "• Мотивация и осознанность\n"
-        logic_msg += "• Источники: Habr, N+1, Reddit, Psychology Today\n"
-        logic_msg += "• Новости за последние 3 дня\n"
-        logic_msg += "• Без дублей — с использованием кеша\n"
+        if not selected:
+            print("Нет новых новостей для отправки.")
+            return
 
+        # Формируем сообщение (без * и _)
+        msg = "📬 Ежедневный дайджест\n\n"
+        for art in selected:
+            title_ru = translate_text(art['title'])
+            source = art.get('source', 'Неизвестно')
+            # Экранируем проблемные символы
+            title_ru = title_ru.replace('*', '').replace('_', '').replace('[', '').replace(']', '').replace('`', '')
+            msg += f"📌 {title_ru}\n🌐 {source}\n🔗 {art['url']}\n\n"
+
+        # Отправляем админу
         if ADMIN_ID:
             try:
                 admin_id_int = int(ADMIN_ID)
-                send_message(admin_id_int, logic_msg, disable_preview=True)
+                send_message(admin_id_int, msg, parse_mode=None, disable_preview=False)
             except ValueError:
                 print(f"❌ ADMIN_ID '{ADMIN_ID}' не является числом")
-
-        # --- Отправляем новости ---
-        if selected:
-            batch_size = 5
-            msg = "📬 *Новости по психологии*\n\n"
-            for i, art in enumerate(selected, 1):
-                title_ru = translate_text(art['title'])
-                source = art.get('source', 'Неизвестно')
-                msg += f"📌 *{title_ru}*\n🌐 {source}\n🔗 {art['url']}\n\n"
-
-                if i % batch_size == 0 or i == len(selected):
-                    if ADMIN_ID:
-                        try:
-                            admin_id_int = int(ADMIN_ID)
-                            send_message(admin_id_int, msg, disable_preview=False)
-                        except ValueError:
-                            print(f"❌ ADMIN_ID '{ADMIN_ID}' не является числом")
-                    msg = ""
-                    if i != len(selected):
-                        msg = "\n"
-
-            # Обновляем кеш
-            for art in selected:
-                url = art.get('url')
-                if url:
-                    seen_urls.add(url)
-            save_cache(seen_urls)
-
         else:
-            # Даже если новостей нет
-            if ADMIN_ID:
-                no_news_msg = "📭 *Новых статей по психологии пока нет.*\n"
-                no_news_msg += "Следующий поиск — завтра в 18:00."
-                send_message(int(ADMIN_ID), no_news_msg, disable_preview=False)
+            print("❌ ADMIN_ID не задан")
+
+        # Обновляем кеш
+        for art in selected:
+            url = art.get('url')
+            if url:
+                seen_urls.add(url)
+        save_cache(seen_urls)
 
         print("✅ Рассылка завершена.")
 
@@ -190,7 +176,7 @@ def main():
         error_msg = f"{type(e).__name__}: {str(e)[:500]}"
         print(f"🔴 Ошибка: {error_msg}")
         if ADMIN_ID and TOKEN:
-            send_message(ADMIN_ID, f"❌ Ошибка: `{error_msg}`")
+            send_message(ADMIN_ID, f"❌ Ошибка: `{error_msg}`", parse_mode=None)
 
 # --- Запуск ---
 if __name__ == "__main__":

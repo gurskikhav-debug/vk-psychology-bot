@@ -37,15 +37,24 @@ def translate_text(text):
         return text
 
 # --- Ключевые слова ---
-KEYWORDS_EN = ['metallurgy', 'ferrous', 'non-ferrous', 'steel', 'metal processing', 'additive manufacturing', '3D printing', 'AI', 'machine learning', 'robotics', 'green energy', 'renewable energy', 'technology']
-KEYWORDS_RU = ['металлургия', 'черная металлургия', 'цветная металлургия', 'производство стали', 'обработка металлов', 'аддитивные технологии', '3D печать', 'искусственный интеллект', 'машинное обучение', 'робототехника', 'зелёная энергетика', 'возобновляемая энергия', 'технологии']
+KEYWORDS_EN = [
+    'technology', 'innovation', 'space', 'AI', 'artificial intelligence',
+    'robotics', 'green energy', '3D printing', 'metallurgy', 'digitalization'
+]
+
+KEYWORDS_RU = [
+    'технологии', 'инновации', 'космос', 'ИИ', 'искусственный интеллект',
+    'робототехника', 'зелёная энергетика', '3D печать', 'металлургия', 'цифровизация'
+]
 
 # --- Поиск новостей ---
 def search_news():
     articles = []
+
+    # 1. NewsAPI — основной источник
     if NEWSAPI_KEY:
         from_date = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
-        query = ' OR '.join(KEYWORDS_EN)
+        query = ' OR '.join(KEYWORDS_EN[:5])  # Узкий запрос
         try:
             url = "https://newsapi.org/v2/everything"
             params = {
@@ -60,38 +69,44 @@ def search_news():
             if r.status_code == 200:
                 data = r.json()
                 for item in data.get('articles', []):
-                    articles.append({
-                        'title': item['title'],
-                        'url': item['url'],
-                        'source': item['source']['name'],
-                        'published': item.get('publishedAt', 'Неизвестно')
-                    })
+                    if item['title'] and item['url']:
+                        articles.append({
+                            'title': item['title'],
+                            'url': item['url'],
+                            'source': item['source']['name'],
+                            'published': item.get('publishedAt', 'Неизвестно')
+                        })
+            else:
+                print(f"❌ NewsAPI ошибка {r.status_code}: {r.text}")
         except Exception as e:
-            print(f"NewsAPI ошибка: {e}")
+            print(f"❌ NewsAPI ошибка: {e}")
 
-    # RSS
+    # 2. Тестовые источники (для проверки)
     try:
-        feeds = {
-            'xinhua': 'http://www.xinhuanet.com/rss/world.xml',
-            'sina': 'https://rss.sina.com.cn/news/china.xml',
-            'sohu': 'http://rss.news.sohu.com/rss2/news.xml'
+        test_feeds = {
+            'Habr Tech': 'https://habr.com/ru/rss/search/?q=технологии&target_type=posts&order=date',
+            'N+1': 'https://nplus1.ru/rss'
         }
-        for name, feed_url in feeds.items():
+        for name, feed_url in test_feeds.items():
             try:
                 feed = feedparser.parse(feed_url)
-                for entry in feed.entries:
-                    title = entry.title.lower()
-                    if any(kw.lower() in title for kw in ['metal', 'tech', 'ai', 'energy']):
+                if feed.bozo:
+                    print(f"⚠️ RSS {name} повреждён")
+                    continue
+                for entry in feed.entries[:10]:
+                    title = entry.get('title', '')
+                    link = entry.get('link', '')
+                    if title and link:
                         articles.append({
-                            'title': entry.title,
-                            'url': entry.link,
+                            'title': title,
+                            'url': link,
                             'source': name,
-                            'published': entry.get('published', 'Неизвестно')
+                            'published': 'Неизвестно'
                         })
             except Exception as e:
-                print(f"Ошибка RSS {name}: {e}")
+                print(f"❌ Ошибка RSS {name}: {e}")
     except Exception as e:
-        print(f"Ошибка парсинга RSS: {e}")
+        print(f"❌ Ошибка парсинга RSS: {e}")
 
     return articles
 
@@ -105,8 +120,8 @@ def send_message(chat_id, text, parse_mode=None, disable_preview=False):
         data = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": parse_mode,  # ← Отключаем Markdown
-            "disable_web_page_preview": disable_preview
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": not disable_preview
         }
         response = requests.post(url, data=data, timeout=10)
         if response.status_code == 200:
@@ -122,46 +137,48 @@ def main():
     try:
         seen_urls = load_cache()
         raw_articles = search_news()
-        print(f"Получено статей: {len(raw_articles)}")
+        print(f"🔍 Получено статей: {len(raw_articles)}")
 
-        # Фильтруем
+        # Фильтруем по ключевым словам
         filtered_articles = []
         for art in raw_articles:
             title = art['title'].lower()
             if any(kw.lower() in title for kw in KEYWORDS_RU + KEYWORDS_EN):
                 filtered_articles.append(art)
 
-        print(f"После фильтрации: {len(filtered_articles)}")
+        print(f"✅ После фильтрации: {len(filtered_articles)}")
 
         # Убираем дубли
         articles = [a for a in filtered_articles if a.get('url') not in seen_urls]
 
         # Ограничиваем 20 новостями
         selected = articles[:20]
-        print(f"Отправляем: {len(selected)} новостей")
+        print(f"📤 Отправляем: {len(selected)} новостей")
 
         if not selected:
-            print("Нет новых новостей для отправки.")
+            print("❌ Нет новых новостей для отправки.")
+            if ADMIN_ID:
+                try:
+                    admin_id_int = int(ADMIN_ID)
+                    send_message(admin_id_int, "📭 Нет новых новостей по вашим темам.")
+                except ValueError:
+                    print(f"❌ ADMIN_ID '{ADMIN_ID}' не является числом")
             return
 
-        # Формируем сообщение (без * и _)
-        msg = "📬 Ежедневный дайджест\n\n"
+        # Формируем сообщение
+        msg = "📬 *Ежедневный дайджест*\n\n"
         for art in selected:
             title_ru = translate_text(art['title'])
             source = art.get('source', 'Неизвестно')
-            # Экранируем проблемные символы
-            title_ru = title_ru.replace('*', '').replace('_', '').replace('[', '').replace(']', '').replace('`', '')
             msg += f"📌 {title_ru}\n🌐 {source}\n🔗 {art['url']}\n\n"
 
-        # Отправляем админу
+        # Отправляем
         if ADMIN_ID:
             try:
                 admin_id_int = int(ADMIN_ID)
                 send_message(admin_id_int, msg, parse_mode=None, disable_preview=False)
             except ValueError:
                 print(f"❌ ADMIN_ID '{ADMIN_ID}' не является числом")
-        else:
-            print("❌ ADMIN_ID не задан")
 
         # Обновляем кеш
         for art in selected:

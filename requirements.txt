@@ -1,0 +1,4 @@
+python-telegram-bot==21.0
+requests
+feedparser
+deep-translator>=1.11.3
